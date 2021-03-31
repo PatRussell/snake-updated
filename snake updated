@@ -1,0 +1,148 @@
+|//Define registers
+  2|// R0-2 reserved for temporary uses
+  3|// Global variables:
+  4|// R3 Tail position
+  5|// R4 Head position
+  6|// R5 Front of queue (address of snake's tail)
+  7|// R6 Back of queue (address of snake's head)
+  8|      MOV R8, #0        //Score of apples eaten
+  9|// Constants:
+ 10|      MOV R10,#.PixelScreen
+ 11|      MOV R11, #.green  //Colour of snake
+ 12|      MOV R12, #.red
+ 13|      MOV R13, #.black
+ 14|//Set up interrupts - but don't enable yet
+ 15|      MOV R0, #update
+ 16|      STR R0, .ClockISR
+ 17|      MOV R0, #0x50
+ 18|      STR R0,.ClockInterruptFrequency
+ 19|      MOV R0, #keyPress
+ 20|      STR R0, .KeyboardISR
+ 21|      MOV R0, #1
+ 22|      STR R0, .KeyboardMask
+ 23|//Initialise game
+ 24|      MOV R3, #1084     //Initialise tail and ...
+ 25|      MOV R4, #1088     //Head next to it (4 bytes = 1 word = 1 pixel)
+ 26|      STR R11,[R10+R3]  //Draw 2-segment snake
+ 27|      STR R11,[R10+R4]
+ 28|      MOV R5, #body     //Pointer front of queue, initialised to first data loc
+ 29|      ADD R6,R5,#4      //Pointer to head address in body data (1 after tail)
+ 30|      STR R3, [R5]      //R3 points to the tail address
+ 31|      STR R4, [R6]      //R4 points to the head address
+ 32|      MOV R0, #1
+ 33|      STR R0, .InterruptRegister //Now we are ready to handle interrupts
+ 34|      BL createApple
+ 35|      BL createHazard
+ 36|      STR R0, .InterruptRegister //Now we are ready to handle interrupts
+ 37|mainLoop: b mainLoop    //Just keeps the processor running, pending interrupts
+ 38|//Interrupt driven
+ 39|update:
+ 40|//Switch on direction of last key
+ 41|      CMP R7,#87        //W key
+ 42|      BEQ up
+ 43|      CMP R7,#65        //A key
+ 44|      BEQ left
+ 45|      CMP R7,#83        //S key
+ 46|      BEQ down
+ 47|// By default the snake will move right
+ 48|right:ADD R4,R4,#4      //+4 (bytes) moves right one pixel
+ 49|      AND R0,R4,#255
+ 50|      CMP R0,#0
+ 51|      BEQ gameOver
+ 52|      B reDraw
+ 53|down: ADD R4,R4,#256    //+64*4 moves down one row
+ 54|      MOV R0, #12284    // One past the last valid pixel
+ 55|      CMP R4,R0
+ 56|      BGT gameOver
+ 57|      B reDraw
+ 58|up:   SUB R4,R4,#256    //-64*4 moves up one row
+ 59|      CMP R4,#0
+ 60|      BLT gameOver
+ 61|      B reDraw
+ 62|left: SUB R4,R4,#4      //-4 moves left one pixel
+ 63|      AND R0,r4,#255
+ 64|      CMP R0,#252
+ 65|      BEQ gameOver
+ 66|reDraw:
+ 67|//First check if the snake would be crossing itself
+ 68|      LDR R0,[R10+R4]   // read, from screen, contents of next pixel
+ 69|      CMP R0,R11        //If it is snake colour...
+ 70|      BEQ gameOver
+ 71|      ADD R6,R6,#4      //Increment the back of queue pointer (by 1 word = 4 bytes)
+ 72|      CMP R6,#limit     //Check pointer is still within end of queue data area
+ 73|      BLT .+2
+ 74|      MOV R6, #body     //If not loop pointer back to start of body data
+ 75|      STR R4, [R6]      //Store the new head pixel number at the rear of the queue
+ 76|      CMP R0, R12       //Check if pixel is apple colour
+ 77|      BEQ eat
+ 78|      CMP R0, R13       //Check if pixel is apple colour
+ 79|      BNE .+3           //Skip to RFE
+ 80|      BL createHazard
+ 81|      CMP R0,R13        //If it is snake colour...
+ 82|      BEQ gameOver
+ 83|      MOV R0, #.white
+ 84|      STR R0, [R10+R3]  //Paint the current tail pixel white
+ 85|      ADD R5,R5,#4      //Increment front of queue pointer
+ 86|      CMP R5,#limit     //Check pointer is still within end of queue data area
+ 87|      BLT .+2
+ 88|      MOV R5, #body     //If not loop pointer back to start of body data
+ 89|      LDR R3,[R5]       //Retrieve pixel number for the new tail
+ 90|      B .+3             //Skip to RFE
+ 91|eat:  ADD R8,R8,#1      //Increment score
+ 92|      BL createApple
+ 93|      STR R11,[R10+R4]  //Draw new head
+ 94|      RFE
+ 95|//Called by keyboard interrupt
+ 96|//If valid key (W,A,S,D) has been pressed, transfer this to R9
+ 97|keyPress: PUSH {R0}
+ 98|      LDR R0,.LastKey   //Read the last key pressed (but don't wait for one)
+ 99|      CMP R0,#87        //W key
+100|      BEQ updateLastKey
+101|      CMP R0,#65        //A key
+102|      BEQ updateLastKey
+103|      CMP R0,#83        //S key
+104|      BEQ updateLastKey
+105|      CMP R0,#68        //D key
+106|      BEQ updateLastKey
+107|      B .+2             //If not a valid new key don't change last key
+108|updateLastKey:
+109|      MOV R7, R0
+110|      POP {R0}
+111|      RFE
+112|createApple: push {R0,R1, LR}
+113|newRandom: LDR R1,.Random // gets a random 32 bit pattern
+114|      MOV R0, #0x3ffc   // Limit random to 14 bits
+115|      AND R1,R1,R0
+116|      MOV R0, #12284    //Max pixel number
+117|      CMP R1,R0
+118|      BGT newRandom     //'Throw again'
+119|      LDR R0, [R10+R1]  //Get intended pixel
+120|      CMP R0,R11        //Compare pixel to snake colour
+121|      BEQ newRandom
+122|      STR R12, [R10+R1] //Draw apple
+123|      POP {R0,R1,LR}
+124|      RET
+125|createHazard: push {R0,R1, LR}
+126|RandomHazard: LDR R1,.Random // gets a random 32 bit pattern
+127|      MOV R0, #0x3ffc   // Limit random to 14 bits
+128|      AND R1,R1,R0
+129|      MOV R0, #12284    //Max pixel number
+130|      CMP R1,R0
+131|      BGT RandomHazard  //'Throw again'
+132|      LDR R0, [R10+R1]  //Get intended pixel
+133|      CMP R0,R11        //Compare pixel to snake colour
+134|      BEQ RandomHazard
+135|      STR R13, [R10+R1] //Draw apple
+136|      POP {R0,R1,LR}
+137|      RET
+138|gameOver: MOV R0, #over
+139|      STR R0,.WriteString
+140|      MOV R0, #score
+141|      STR R0,.WriteString
+142|      STR R8, .WriteSignedNum
+143|      HALT              //To stop program execution running into data area
+144|over: .ASCIZ " Game Over!\n"
+145|score: .ASCIZ "Your score: "
+146|      .ALIGN 256
+147|body: .BLOCK 3072       //For the 'queue' of body segments
+148|limit:                  //1 past end of queue data                  
